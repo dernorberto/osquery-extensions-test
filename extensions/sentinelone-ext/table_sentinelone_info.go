@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"os/exec"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -91,19 +90,6 @@ var columnPathMap = map[string]string{
 	"management_connected": "management_connected",
 }
 
-// windowsColumnPathMap contains only columns that can be derived from the
-// Windows `sentinelctl status` output format.
-var windowsColumnPathMap = map[string]string{
-	"disable_state":                        "disable_state",
-	"sentinel_monitor_is_loaded":          "sentinel_monitor_is_loaded",
-	"self_protection_status":              "self_protection_status",
-	"monitor_build_id":                    "monitor_build_id",
-	"sentinel_network_monitor_is_loaded":  "sentinel_network_monitor_is_loaded",
-	"sentinel_agent_is_loaded":            "sentinel_agent_is_loaded",
-	"sentinel_agent_is_running":           "sentinel_agent_is_running",
-	"mitigation_policy":                   "mitigation_policy",
-}
-
 // columnOrder is the canonical column order returned by SentinelOneInfoColumns.
 // Keep in sync with the values of columnPathMap.
 var columnOrder = []string{
@@ -155,30 +141,11 @@ var columnOrder = []string{
 	"management_connected",
 }
 
-// windowsColumnOrder is the Windows-specific schema. Keep in sync with
-// windowsColumnPathMap values.
-var windowsColumnOrder = []string{
-	"disable_state",
-	"sentinel_monitor_is_loaded",
-	"self_protection_status",
-	"monitor_build_id",
-	"sentinel_network_monitor_is_loaded",
-	"sentinel_agent_is_loaded",
-	"sentinel_agent_is_running",
-	"mitigation_policy",
-}
-
 func activeColumnOrder() []string {
-	if runtime.GOOS == "windows" {
-		return windowsColumnOrder
-	}
 	return columnOrder
 }
 
 func activeColumnPathMap() map[string]string {
-	if runtime.GOOS == "windows" {
-		return windowsColumnPathMap
-	}
 	return columnPathMap
 }
 
@@ -214,6 +181,7 @@ func SentinelOneInfoGenerate(
 
 	parsed := parseSentinelctlStatus(string(out))
 	applyWindowsStatusAliases(parsed)
+	applyWindowsCanonicalMappings(parsed)
 	populated := false
 	for path, val := range parsed {
 		col, ok := pathMap[path]
@@ -282,6 +250,66 @@ func applyWindowsStatusAliases(parsed map[string]string) {
 		if strings.HasPrefix(low, "running") && parsed["sentinel_agent_is_running"] == "" {
 			parsed["sentinel_agent_is_running"] = v
 		}
+	}
+}
+
+// applyWindowsCanonicalMappings projects Windows-only sentinelctl fields into
+// canonical macOS/Linux path keys so all platforms can share one schema.
+func applyWindowsCanonicalMappings(parsed map[string]string) {
+	if v := extractVersionPrefix(parsed["monitor_build_id"]); v != "" {
+		parsed["agent_version"] = v
+	}
+
+	if v := strings.TrimSpace(parsed["disable_state"]); v != "" {
+		low := strings.ToLower(v)
+		switch {
+		case strings.Contains(low, "not disabled"):
+			parsed["agent_agent_operational_state"] = "enabled"
+		case strings.Contains(low, "disabled"):
+			parsed["agent_agent_operational_state"] = "disabled"
+		default:
+			parsed["agent_agent_operational_state"] = "unknown"
+		}
+	}
+
+	if v := strings.TrimSpace(parsed["self_protection_status"]); v != "" {
+		low := strings.ToLower(v)
+		switch low {
+		case "on", "enabled":
+			parsed["agent_protection"] = "enabled"
+		case "off", "disabled":
+			parsed["agent_protection"] = "disabled"
+		default:
+			parsed["agent_protection"] = "unknown"
+		}
+	}
+
+	if v := strings.TrimSpace(parsed["sentinel_network_monitor_is_loaded"]); v != "" {
+		parsed["agent_agent_network_monitoring"] = normalizeLoadedState(v)
+	}
+
+	if v := strings.TrimSpace(parsed["sentinel_monitor_is_loaded"]); v != "" {
+		parsed["agent_es_framework"] = normalizeLoadedState(v)
+	}
+
+	if v := strings.TrimSpace(parsed["sentinel_agent_is_running"]); v != "" {
+		if strings.HasPrefix(strings.ToLower(v), "running") {
+			parsed["agent_ready"] = "yes"
+		} else {
+			parsed["agent_ready"] = "no"
+		}
+	}
+}
+
+func normalizeLoadedState(v string) string {
+	low := strings.ToLower(strings.TrimSpace(v))
+	switch {
+	case strings.HasPrefix(low, "loaded"), strings.HasPrefix(low, "running"), strings.HasPrefix(low, "started"):
+		return "started"
+	case strings.HasPrefix(low, "not loaded"), strings.HasPrefix(low, "stopped"):
+		return "stopped"
+	default:
+		return "unknown"
 	}
 }
 

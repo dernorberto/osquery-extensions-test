@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"runtime"
 	"strconv"
 	"testing"
 	"time"
@@ -88,9 +87,6 @@ func setRunSentinelctl(t *testing.T, fn func(args []string) ([]byte, error)) fun
 func TestSentinelOneInfoColumns(t *testing.T) {
 	cols := SentinelOneInfoColumns()
 	expectedOrder := columnOrder
-	if runtime.GOOS == "windows" {
-		expectedOrder = windowsColumnOrder
-	}
 	if len(cols) != len(expectedOrder) {
 		t.Fatalf("expected %d columns, got %d", len(expectedOrder), len(cols))
 	}
@@ -104,49 +100,8 @@ func TestSentinelOneInfoColumns(t *testing.T) {
 	}
 }
 
-func TestActiveColumnOrder_WindowsReducedSchema(t *testing.T) {
-	if len(windowsColumnOrder) == 0 {
-		t.Fatalf("windowsColumnOrder should not be empty")
-	}
 
-	// Windows schema should only include fields that come from Windows status.
-	mustHave := []string{
-		"disable_state",
-		"sentinel_monitor_is_loaded",
-		"self_protection_status",
-		"monitor_build_id",
-		"sentinel_network_monitor_is_loaded",
-		"sentinel_agent_is_loaded",
-		"sentinel_agent_is_running",
-		"mitigation_policy",
-	}
-	for _, name := range mustHave {
-		found := false
-		for _, got := range windowsColumnOrder {
-			if got == name {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("windowsColumnOrder missing %q", name)
-		}
-	}
-
-	mustNotHave := []string{"agent_id", "install_date", "management_server", "management_last_seen", "service_shell", "agent_version", "ready"}
-	for _, name := range mustNotHave {
-		for _, got := range windowsColumnOrder {
-			if got == name {
-				t.Errorf("windowsColumnOrder should not include %q", name)
-			}
-		}
-	}
-}
-
-func TestActiveColumnOrder_NonWindowsFullSchema(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("non-Windows assertion")
-	}
+func TestActiveColumnOrder_FullSchemaAllPlatforms(t *testing.T) {
 	got := activeColumnOrder()
 	if len(got) != len(columnOrder) {
 		t.Fatalf("activeColumnOrder len=%d, want %d", len(got), len(columnOrder))
@@ -350,10 +305,6 @@ func TestSentinelOneInfoGenerate_PartialOutput(t *testing.T) {
 }
 
 func TestSentinelOneInfoGenerate_WindowsStatusOutput(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("windows-only schema assertion")
-	}
-
 	cleanup := setRunSentinelctl(t, func(args []string) ([]byte, error) {
 		if len(args) != 1 || args[0] != "status" {
 			return nil, errors.New("unexpected args")
@@ -371,32 +322,29 @@ func TestSentinelOneInfoGenerate_WindowsStatusOutput(t *testing.T) {
 	}
 	row := rows[0]
 
-	if len(row) != len(windowsColumnOrder) {
-		t.Fatalf("row has %d columns, want %d", len(row), len(windowsColumnOrder))
+	if len(row) != len(columnOrder) {
+		t.Fatalf("row has %d columns, want %d", len(row), len(columnOrder))
 	}
-	if row["disable_state"] != "Not disabled by the user" {
-		t.Errorf("disable_state = %q", row["disable_state"])
+	if row["agent_version"] != "25.1.4.434" {
+		t.Errorf("agent_version = %q", row["agent_version"])
 	}
-	if row["sentinel_monitor_is_loaded"] != "loaded" {
-		t.Errorf("sentinel_monitor_is_loaded = %q", row["sentinel_monitor_is_loaded"])
+	if row["operational_state"] != "enabled" {
+		t.Errorf("operational_state = %q", row["operational_state"])
 	}
-	if row["self_protection_status"] != "On" {
-		t.Errorf("self_protection_status = %q", row["self_protection_status"])
+	if row["protection"] != "enabled" {
+		t.Errorf("protection = %q", row["protection"])
 	}
-	if row["monitor_build_id"] != "25.1.4.434+8d4abf01154f6752-Release.x64" {
-		t.Errorf("monitor_build_id = %q", row["monitor_build_id"])
+	if row["network_monitoring"] != "started" {
+		t.Errorf("network_monitoring = %q", row["network_monitoring"])
 	}
-	if row["sentinel_network_monitor_is_loaded"] != "loaded" {
-		t.Errorf("sentinel_network_monitor_is_loaded = %q", row["sentinel_network_monitor_is_loaded"])
+	if row["ready"] != "yes" {
+		t.Errorf("ready = %q", row["ready"])
 	}
-	if row["sentinel_agent_is_loaded"] != "loaded" {
-		t.Errorf("sentinel_agent_is_loaded = %q", row["sentinel_agent_is_loaded"])
+	if row["es_framework"] != "started" {
+		t.Errorf("es_framework = %q", row["es_framework"])
 	}
-	if row["sentinel_agent_is_running"] != "running as PPL" {
-		t.Errorf("sentinel_agent_is_running = %q", row["sentinel_agent_is_running"])
-	}
-	if row["mitigation_policy"] != "none" {
-		t.Errorf("mitigation_policy = %q", row["mitigation_policy"])
+	if row["management_server"] != "" {
+		t.Errorf("management_server expected empty, got %q", row["management_server"])
 	}
 }
 
